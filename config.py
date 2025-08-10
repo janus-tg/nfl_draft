@@ -49,3 +49,9 @@ LINEUP = [
 ]
 
 POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
+
+# Draft board settings
+# Default number of teams in league; used to set replacement baselines
+LEAGUE_TEAMS = 10
+# Tier drop threshold in season-long VORP points to start a new tier
+TIER_DROP = 8.0

@@ -27,31 +27,54 @@ def optimize_lineup(df: pd.DataFrame):
     lineup["DEF"] = def_players.head(1)
     used_ids.update(lineup["DEF"]["player_id"])
 
-    bench_pool = df[
+    # Bench: simple diversification heuristic - pick best remaining by cycling positions
+    bench_candidates = df[
         (~df["player_id"].isin(used_ids)) & (df["pos"].isin(["QB", "RB", "WR", "TE"]))
     ]
-    lineup["BN"] = bench_pool.head(5)
+    bench = []
+    pos_cycle = ["RB", "WR", "QB", "TE"]
+    for _ in range(5):
+        for p in pos_cycle:
+            if len(bench) >= 5:
+                break
+            cand = bench_candidates[
+                (bench_candidates["pos"] == p)
+                & (
+                    ~bench_candidates["player_id"].isin(
+                        {*used_ids, *[r for r in bench]}
+                    )
+                )
+            ].head(1)
+            if not cand.empty:
+                bench.append(cand.iloc[0]["player_id"])
+        if len(bench) >= 5:
+            break
+    # Fallback if still short
+    if len(bench) < 5:
+        extra = (
+            bench_candidates[~bench_candidates["player_id"].isin(bench)]
+            .head(5 - len(bench))["player_id"]
+            .tolist()
+        )
+        bench.extend(extra)
+    lineup["BN"] = bench_candidates[bench_candidates["player_id"].isin(bench)]
 
-    final = pd.concat(
-        [
-            lineup["QB"],
-            lineup["RB"],
-            lineup["WR"],
-            lineup["TE"],
-            lineup["FLEX"],
-            lineup["K"],
-            lineup["DEF"],
-            lineup["BN"],
-        ]
-    )
-    final["slot"] = (
-        ["QB"]
-        + ["RB"] * 2
-        + ["WR"] * 2
-        + ["TE"]
-        + ["FLEX"]
-        + ["K"]
-        + ["DEF"]
-        + ["BN"] * 5
-    )
+    parts = [
+        ("QB", lineup["QB"]),
+        ("RB", lineup["RB"]),
+        ("WR", lineup["WR"]),
+        ("TE", lineup["TE"]),
+        ("FLEX", lineup["FLEX"]),
+        ("K", lineup["K"]),
+        ("DEF", lineup["DEF"]),
+        ("BN", lineup["BN"]),
+    ]
+    labeled = []
+    for slot_name, df_part in parts:
+        if df_part.empty:
+            continue
+        block = df_part.copy()
+        block["slot"] = [slot_name] * len(block)
+        labeled.append(block)
+    final = pd.concat(labeled)
     return final
