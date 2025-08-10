@@ -1,6 +1,7 @@
 from fetch import get_player_table
 from scoring import compute_fantasy_points
 from optimizer import optimize_lineup
+import pandas as pd
 
 
 def show_top_players_by_position(df, top_n=30):
@@ -14,16 +15,38 @@ def show_top_players_by_position(df, top_n=30):
         )
 
 
+def aggregate_season_stats():
+    # Aggregate stats for all 18 weeks
+    season_stats = {}
+    for week in range(1, 19):
+        print(f"Fetching week {week} data...")
+        weekly_df = get_player_table(season=2024, week=week)
+        for _, row in weekly_df.iterrows():
+            pid = row["player_id"]
+            if pid not in season_stats:
+                season_stats[pid] = row.copy()
+                # Zero out all stat columns except id/name/team/pos
+                for col in weekly_df.columns:
+                    if col not in ("player_id", "player", "team", "pos"):
+                        season_stats[pid][col] = row[col]
+            else:
+                for col in weekly_df.columns:
+                    if col not in ("player_id", "player", "team", "pos"):
+                        season_stats[pid][col] += row[col]
+    df = pd.DataFrame(list(season_stats.values()))
+    return df
+
+
 def main():
-    print("Fetching player projections from Sleeper API...")
-    df = get_player_table(season=2024, week=1)
-    print(f"Fetched {len(df)} players.")
+    print("Aggregating 2024 season stats from Sleeper API...")
+    df = aggregate_season_stats()
+    print(f"Aggregated stats for {len(df)} players.")
 
     df["fantasy_points"] = compute_fantasy_points(df)
     show_top_players_by_position(df, top_n=30)
 
     lineup = optimize_lineup(df)
-    print("\nYour optimal lineup:")
+    print("\nYour optimal lineup for the 2024 season:")
     print(
         lineup[["slot", "player", "team", "pos", "fantasy_points"]]
         .reset_index(drop=True)
