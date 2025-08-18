@@ -3,7 +3,18 @@ from scoring import compute_fantasy_points
 from optimizer import optimize_lineup
 import pandas as pd
 from logger import logger
-from config import POSITIONS, LEAGUE_TEAMS, TIER_DROP
+from config import (
+    POSITIONS,
+    LEAGUE_TEAMS,
+    TIER_DROP,
+    DRAFT_ROUNDS,
+    DRAFT_SLOT_R1,
+    DRAFT_SLOT_R2,
+    DRAFT_SNAKE,
+    QB_TE_EARLIEST_ROUND,
+    K_DEF_EARLIEST_ROUND,
+    PRIORITY_STARTERS,
+)
 import os
 
 
@@ -289,6 +300,162 @@ def build_and_export_draft_board(
             )
         )
 
+        # Build snake draft plan honoring your slots and priorities
+        def build_draft_plan(board_df: pd.DataFrame) -> pd.DataFrame:
+            # Prepare sorted views
+            by_overall = board_df.sort_values(["OverallRank"]).reset_index(drop=True)
+            pos_lists = {
+                p: board_df[board_df["pos"] == p]
+                .sort_values(["VORP", "Tier", "PosRank"], ascending=[False, True, True])
+                .reset_index(drop=True)
+                for p in POSITIONS
+            }
+
+            taken: set[str] = set()
+            plan_rows = []
+            # Starters targets (your team only)
+            targets = {"QB": 1, "TE": 1, "K": 1, "DEF": 1, **PRIORITY_STARTERS}
+            filled = {k: 0 for k in targets}
+
+            # Determine teams used for simulation: derive from slots if mismatch
+            sim_teams = teams
+            if DRAFT_SNAKE and (DRAFT_SLOT_R1 + DRAFT_SLOT_R2 - 1) > 1:
+                inferred = DRAFT_SLOT_R1 + DRAFT_SLOT_R2 - 1
+                if inferred != teams:
+                    logger.info(
+                        f"Adjusting simulated team count from {teams} to {inferred} to honor pick slots R1={DRAFT_SLOT_R1}, R2={DRAFT_SLOT_R2}."
+                    )
+                    sim_teams = inferred
+
+            def is_taken(pid) -> bool:
+                return pid in taken
+
+            def take_row(row: pd.Series) -> pd.Series | None:
+                if row is None:
+                    return None
+                pid = row["player_id"]
+                if pid in taken:
+                    return None
+                taken.add(pid)
+                return row
+
+            def best_available_overall(
+                allowed_positions: set[str] | None = None,
+            ) -> pd.Series | None:
+                for _, r in by_overall.iterrows():
+                    if r["player_id"] in taken:
+                        continue
+                    if allowed_positions and r["pos"] not in allowed_positions:
+                        continue
+                    return take_row(r)
+                return None
+
+            def best_available_by_pos(pos: str) -> pd.Series | None:
+                lst = pos_lists.get(pos)
+                if lst is None or lst.empty:
+                    return None
+                for _, r in lst.iterrows():
+                    if r["player_id"] not in taken:
+                        return take_row(r)
+                return None
+
+            def my_pick_for_round(rnd: int) -> pd.Series | None:
+                pick = None
+                # Fill RB then WR starters first
+                if filled.get("RB", 0) < targets.get("RB", 0):
+                    pick = best_available_by_pos("RB")
+                if pick is None and filled.get("WR", 0) < targets.get("WR", 0):
+                    pick = best_available_by_pos("WR")
+                # Then QB/TE from allowed round
+                if pick is None and rnd >= QB_TE_EARLIEST_ROUND:
+                    qb = (
+                        best_available_by_pos("QB")
+                        if filled.get("QB", 0) < targets.get("QB", 0)
+                        else None
+                    )
+                    te = (
+                        best_available_by_pos("TE")
+                        if filled.get("TE", 0) < targets.get("TE", 0)
+                        else None
+                    )
+                    if qb is not None and te is not None:
+                        pick = qb if qb["VORP"] >= te["VORP"] else te
+                        other = te if pick is qb else qb
+                        if other is not None:
+                            # push back the other by removing from taken (since best_available_by_pos took it)
+                            taken.discard(other["player_id"])
+                    else:
+                        if qb is not None:
+                            pick = qb
+                        elif te is not None:
+                            pick = te
+                # K/DEF late
+                if pick is None and rnd >= K_DEF_EARLIEST_ROUND:
+                    cand_def = best_available_by_pos("DEF")
+                    if cand_def is not None:
+                        pick = cand_def
+                    else:
+                        cand_k = best_available_by_pos("K")
+                        if cand_k is not None:
+                            pick = cand_k
+                # Depth WR/RB
+                if pick is None:
+                    cand_wr = best_available_by_pos("WR")
+                    if cand_wr is not None:
+                        pick = cand_wr
+                    else:
+                        cand_rb = best_available_by_pos("RB")
+                        if cand_rb is not None:
+                            pick = cand_rb
+                # Fallback: best overall
+                if pick is None:
+                    pick = best_available_overall()
+                return pick
+
+            def opp_pick_for_round(rnd: int) -> pd.Series | None:
+                # Opponents pick by overall, deferring K/DEF early and mildly deferring QB/TE
+                allowed: set[str] | None = None
+                early_def_positions = {"K", "DEF"}
+                early_qb_te = {"QB", "TE"}
+                if rnd < K_DEF_EARLIEST_ROUND:
+                    allowed = set(POSITIONS) - early_def_positions
+                if rnd < QB_TE_EARLIEST_ROUND:
+                    allowed = (allowed or set(POSITIONS)) - early_qb_te
+                return best_available_overall(allowed)
+
+            # Simulate the snake draft across all rounds
+            for rnd in range(1, DRAFT_ROUNDS + 1):
+                order = list(range(1, sim_teams + 1))
+                if DRAFT_SNAKE and (rnd % 2 == 0):
+                    order = list(reversed(order))
+                for pick_in_round in order:
+                    is_me = (rnd % 2 == 1 and pick_in_round == DRAFT_SLOT_R1) or (
+                        rnd % 2 == 0 and pick_in_round == DRAFT_SLOT_R2
+                    )
+                    if is_me:
+                        pick = my_pick_for_round(rnd)
+                        if pick is not None:
+                            if pick["pos"] in filled:
+                                filled[pick["pos"]] += 1
+                            plan_rows.append(
+                                {
+                                    "Round": rnd,
+                                    "PickInRound": pick_in_round,
+                                    "player": pick["player"],
+                                    "team": pick["team"],
+                                    "pos": pick["pos"],
+                                    "VORP": float(pick["VORP"]),
+                                    "Tier": int(pick.get("Tier", 0) or 0),
+                                }
+                            )
+                    else:
+                        # Opponent removes a player from the pool
+                        _ = opp_pick_for_round(rnd)
+
+            return pd.DataFrame(plan_rows)
+
+        draft_plan = build_draft_plan(board)
+
         with pd.ExcelWriter(output_path) as writer:
             board.sort_values("OverallRank").loc[:, board_out_cols].to_excel(
                 writer, sheet_name="Overall", index=False
@@ -298,6 +465,8 @@ def build_and_export_draft_board(
                 pos_board.loc[
                     :, [c for c in board_out_cols if c in pos_board.columns]
                 ].to_excel(writer, sheet_name=pos, index=False)
+            if not draft_plan.empty:
+                draft_plan.to_excel(writer, sheet_name="DraftPlan", index=False)
             # Streaming plan
             if not streaming_plan.empty:
                 streaming_plan.sort_values(["pos", "week"]).to_excel(

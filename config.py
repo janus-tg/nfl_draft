@@ -55,3 +55,14 @@ POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
 LEAGUE_TEAMS = 10
 # Tier drop threshold in season-long VORP points to start a new tier
 TIER_DROP = 8.0
+# Draft plan preferences
+DRAFT_ROUNDS = 15
+# Known snake draft slots
+DRAFT_SLOT_R1 = 8
+DRAFT_SLOT_R2 = 4
+DRAFT_SNAKE = True
+# Earliest rounds to consider for positions
+QB_TE_EARLIEST_ROUND = 5
+K_DEF_EARLIEST_ROUND = 14
+# Prioritize filling these starter counts before others
+PRIORITY_STARTERS = {"RB": 2, "WR": 2}
