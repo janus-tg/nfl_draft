@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -138,6 +138,13 @@ celerybeat.pid
 .env
 .envrc
 .venv
+
+# Sleeper API response cache (fetch.py) -- regenerable, can grow to 50MB+
+.cache/
+
+# Node (web/ has its own .gitignore too, but keep the repo root defensive)
+node_modules/
+dist/
 env/
 venv/
 ENV/
