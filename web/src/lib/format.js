@@ -35,6 +35,7 @@ export const BOARD_COLUMNS = [
   { key: 'RiskCost', label: 'RiskCost', fmt: n0 },
   { key: 'Durability', label: 'Durab', fmt: n2 },
   { key: 'Age', label: 'Age', fmt: (v) => (v == null ? '—' : v) },
+  { key: 'OLRating', label: 'OLine', fmt: (v) => (v == null ? '—' : Math.round(v)) },
   { key: 'CV', label: 'CV', fmt: n2 },
   { key: 'Injury', label: 'Injury', align: 'l', fmt: (v) => v || '—' },
 ]

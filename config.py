@@ -145,6 +145,30 @@ PROJECTION_SIGMA_ROOKIE = 0.20
 # Extra uncertainty when the model and the market disagree sharply.
 PROJECTION_SIGMA_MARKET_GAP = 0.12
 
+# ---------------------------------------------------------------- offensive line
+# Team offensive line quality for the coming season, 0-100 (higher = better
+# protection/run-blocking). Sourced from Sharp Football Analysis's 2026
+# offensive line rankings (sharpfootballanalysis.com/analysis/best-nfl-offensive-line-rankings/),
+# pulled 2026-08-25. Update manually each offseason and after major line injuries.
+OL_RATING = {
+    "DEN": 100, "PHI": 91, "BUF": 87, "TB": 86, "LAR": 84, "CHI": 82, "SF": 78,
+    "LAC": 73, "SEA": 65, "ATL": 64, "IND": 60, "CAR": 58, "MIN": 57, "DET": 56,
+    "NE": 53, "NO": 52, "JAX": 51, "DAL": 48, "NYJ": 47, "NYG": 46, "PIT": 45,
+    "WAS": 43, "KC": 38, "BAL": 32, "LV": 31, "ARI": 28, "GB": 18, "CIN": 16,
+    "MIA": 10, "TEN": 8, "HOU": 6, "CLE": 5,
+}
+
+# How strongly offensive-line quality moves QB per-game production. Expressed
+# as the fractional swing at +/-1 standard deviation of OL_RATING across the
+# league -- e.g. 0.10 means a QB behind a line one SD better than average is
+# projected ~10% higher, all else equal. A QB's box-score rate already reflects
+# his own talent; this is the added/subtracted cushion from the five guys in
+# front of him, which the weekly projection has no way to see. Only applied to
+# QBs -- the run-blocking half of the line is already embedded in each RB's
+# own historical rate.
+QB_OL_ADJUSTMENT_STRENGTH = 0.10
+QB_OL_ADJUSTMENT_CLIP = (0.85, 1.15)  # floor/ceiling on the resulting multiplier
+
 # ---------------------------------------------------------------- market
 # How much to trust consensus ADP vs. the projection model when they disagree.
 # 0 = ignore the market, 1 = draft strictly to ADP.

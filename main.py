@@ -45,6 +45,7 @@ BOARD_COLS = [
     "injury_status", "injury_detail", "injury_games_missed",
     "durability_rate", "age", "cv", "dud_week_rate", "playoff_ppg",
     "naive_points", "risk_cost", "snap_share", "hist_ppg", "hist_games",
+    "ol_rating", "ol_multiplier",
 ]
 
 RENAME = {
@@ -63,6 +64,7 @@ RENAME = {
     "playoff_ppg": "PlayoffPPG", "naive_points": "NaivePts",
     "risk_cost": "RiskCost", "snap_share": "SnapShare",
     "hist_ppg": "HistPPG", "hist_games": "HistGm",
+    "ol_rating": "OLRating", "ol_multiplier": "OLMult",
 }
 
 

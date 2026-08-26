@@ -29,7 +29,10 @@ from config import (
     INJURY_SEVERITY,
     INJURY_STATUS_EFFECT,
     MIN_GAMES_FOR_DURABILITY_SEASON,
+    OL_RATING,
     POS_BASE_AVAILABILITY,
+    QB_OL_ADJUSTMENT_CLIP,
+    QB_OL_ADJUSTMENT_STRENGTH,
     VOLATILITY_PRIOR_GAMES,
 )
 from logger import logger
@@ -165,12 +168,43 @@ def age_multiplier(pid: str, pos: str, players: dict) -> float:
     return float(max(0.55, 1.0 - decay * (age - cliff)))
 
 
+# --------------------------------------------------------------- offensive line
+_OL_RATINGS_ARR = np.array(list(OL_RATING.values()), dtype=float)
+_OL_MEAN = float(_OL_RATINGS_ARR.mean()) if _OL_RATINGS_ARR.size else 0.0
+_OL_SD = float(_OL_RATINGS_ARR.std(ddof=0)) if _OL_RATINGS_ARR.size else 0.0
+
+
+def offensive_line_multiplier(pos: str, team: str | None) -> tuple[float, float | None]:
+    """QB production multiplier from the team's offensive line quality.
+
+    The weekly projection has no visibility into pass protection: a QB behind
+    an elite line gets a clean pocket and more time to throw, one behind a bad
+    line takes more sacks and rushed throws no matter how talented he is.
+    Positions other than QB are left alone -- offensive line effects on the
+    run game are already embedded in each RB's own historical rate.
+
+    Returns (multiplier, ol_rating) so the rating itself can be surfaced on the
+    board alongside the adjustment it produced.
+    """
+    if pos != "QB" or _OL_SD <= 1e-9:
+        return 1.0, None
+    rating = OL_RATING.get(team) if team else None
+    if rating is None:
+        return 1.0, None
+    z = (rating - _OL_MEAN) / _OL_SD
+    mult = 1.0 + QB_OL_ADJUSTMENT_STRENGTH * z
+    lo, hi = QB_OL_ADJUSTMENT_CLIP
+    return float(np.clip(mult, lo, hi)), float(rating)
+
+
 # --------------------------------------------------------------- assembly
 def player_risk_profile(pid: str, pos: str, players: dict, hist: dict) -> dict:
     """Expected games, per-game availability, and the production multiplier."""
     dur_rate, sample_games = durability_rate(pid, pos, hist)
     inj = injury_adjustment(pid, pos, players)
     age_mult = age_multiplier(pid, pos, players)
+    team = (players.get(pid) or {}).get("team")
+    ol_mult, ol_rating = offensive_line_multiplier(pos, team)
 
     # Healthy-season expectation, then subtract the games this specific injury
     # is expected to cost.
@@ -193,9 +227,11 @@ def player_risk_profile(pid: str, pos: str, players: dict, hist: dict) -> dict:
         "age_multiplier": round(age_mult, 3),
         "expected_games": round(exp_games, 2),
         "availability": round(exp_games / GAMES_PER_TEAM, 3),
-        # Only the injury rust factor scales per-game output; see above for
-        # why age deliberately does not.
-        "production_multiplier": round(inj["rust_multiplier"], 3),
+        # Injury rust and the QB offensive-line adjustment both scale per-game
+        # output; age deliberately does not (see above).
+        "production_multiplier": round(inj["rust_multiplier"] * ol_mult, 3),
+        "ol_rating": ol_rating,
+        "ol_multiplier": round(ol_mult, 3),
         **inj,
     }
 
