@@ -1,3 +1,6 @@
+# Builds web/ (Vite) and publishes it to GitHub Pages.
+# Requires: Settings > Pages > Source = "GitHub Actions", and the repo
+# must be public (or on a paid plan) for Pages to serve it.
 name: Deploy web to GitHub Pages
 
 on:
