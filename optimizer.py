@@ -1,3 +1,9 @@
+"""UNUSED / legacy: superseded by draft.py's roster/plan logic (Roster,
+simulate_drafts, build_plan_for_slot), which accounts for VORP, scarcity, and
+opponent behavior instead of picking straight down a "fantasy_points" column.
+Not imported anywhere in the pipeline. Kept for reference; safe to delete.
+"""
+
 from config import LINEUP
 import pandas as pd
 

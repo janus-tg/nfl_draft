@@ -18,12 +18,16 @@ This module replaces that with two things measured from actual results:
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 
 from config import (
     AGE_AVAILABILITY_PENALTY,
     AGE_CLIFF,
     AGE_DECAY_PER_YEAR,
+    DEPTH_CHART_CV_BUMP,
+    DEPTH_CHART_CV_BUMP_DEFAULT,
     DURABILITY_PRIOR_GAMES,
     GAMES_PER_TEAM,
     INJURY_SEVERITY,
@@ -33,6 +37,9 @@ from config import (
     POS_BASE_AVAILABILITY,
     QB_OL_ADJUSTMENT_CLIP,
     QB_OL_ADJUSTMENT_STRENGTH,
+    RB_MOVER_OL_ADJUSTMENT_STRENGTH,
+    RECENT_TEAM_CHANGE_DAYS,
+    SUSPENSION_GAMES_OVERRIDE,
     VOLATILITY_PRIOR_GAMES,
 )
 from logger import logger
@@ -130,7 +137,12 @@ def injury_adjustment(pid: str, pos: str, players: dict) -> dict:
     roster_status = info.get("status")
 
     missed, rust = 0.0, 1.0
-    if status and status in INJURY_STATUS_EFFECT:
+    if status == "Sus" and pid in SUSPENSION_GAMES_OVERRIDE:
+        # A real suspension is public and known-length; trust that over the
+        # generic "Sus" placeholder below (replaces it, not adds to it).
+        missed += SUSPENSION_GAMES_OVERRIDE[pid]
+        rust *= INJURY_STATUS_EFFECT["Sus"]["rust"]
+    elif status and status in INJURY_STATUS_EFFECT:
         missed += INJURY_STATUS_EFFECT[status]["games_missed"]
         rust *= INJURY_STATUS_EFFECT[status]["rust"]
     elif roster_status in ("Inactive", "Injured Reserve"):
@@ -174,25 +186,49 @@ _OL_MEAN = float(_OL_RATINGS_ARR.mean()) if _OL_RATINGS_ARR.size else 0.0
 _OL_SD = float(_OL_RATINGS_ARR.std(ddof=0)) if _OL_RATINGS_ARR.size else 0.0
 
 
-def offensive_line_multiplier(pos: str, team: str | None) -> tuple[float, float | None]:
-    """QB production multiplier from the team's offensive line quality.
+def _recently_changed_team(info: dict) -> bool:
+    """True if Sleeper shows a team change within the current offseason window."""
+    ts = info.get("team_changed_at")
+    if not ts:
+        return False
+    try:
+        ts = float(ts)
+    except (TypeError, ValueError):
+        return False
+    age_days = (time.time() * 1000 - ts) / 86_400_000
+    return 0 <= age_days <= RECENT_TEAM_CHANGE_DAYS
+
+
+def offensive_line_multiplier(pos: str, team: str | None,
+                              info: dict | None = None) -> tuple[float, float | None]:
+    """Production multiplier from the team's offensive line quality.
 
     The weekly projection has no visibility into pass protection: a QB behind
     an elite line gets a clean pocket and more time to throw, one behind a bad
-    line takes more sacks and rushed throws no matter how talented he is.
-    Positions other than QB are left alone -- offensive line effects on the
-    run game are already embedded in each RB's own historical rate.
+    line takes more sacks and rushed throws no matter how talented he is. Every
+    QB gets this.
+
+    RBs are left alone by default -- offensive line effects on the run game are
+    already embedded in each RB's own historical rate -- UNLESS he just changed
+    teams (trade/free agency this offseason), in which case that history
+    belongs to his OLD line and the same adjustment QBs get applies in full.
 
     Returns (multiplier, ol_rating) so the rating itself can be surfaced on the
     board alongside the adjustment it produced.
     """
-    if pos != "QB" or _OL_SD <= 1e-9:
+    if _OL_SD <= 1e-9:
+        return 1.0, None
+    if pos == "QB":
+        strength = QB_OL_ADJUSTMENT_STRENGTH
+    elif pos == "RB" and info is not None and _recently_changed_team(info):
+        strength = RB_MOVER_OL_ADJUSTMENT_STRENGTH
+    else:
         return 1.0, None
     rating = OL_RATING.get(team) if team else None
     if rating is None:
         return 1.0, None
     z = (rating - _OL_MEAN) / _OL_SD
-    mult = 1.0 + QB_OL_ADJUSTMENT_STRENGTH * z
+    mult = 1.0 + strength * z
     lo, hi = QB_OL_ADJUSTMENT_CLIP
     return float(np.clip(mult, lo, hi)), float(rating)
 
@@ -200,11 +236,12 @@ def offensive_line_multiplier(pos: str, team: str | None) -> tuple[float, float 
 # --------------------------------------------------------------- assembly
 def player_risk_profile(pid: str, pos: str, players: dict, hist: dict) -> dict:
     """Expected games, per-game availability, and the production multiplier."""
+    info = players.get(pid) or {}
     dur_rate, sample_games = durability_rate(pid, pos, hist)
     inj = injury_adjustment(pid, pos, players)
     age_mult = age_multiplier(pid, pos, players)
-    team = (players.get(pid) or {}).get("team")
-    ol_mult, ol_rating = offensive_line_multiplier(pos, team)
+    team = info.get("team")
+    ol_mult, ol_rating = offensive_line_multiplier(pos, team, info)
 
     # Healthy-season expectation, then subtract the games this specific injury
     # is expected to cost.
@@ -256,8 +293,8 @@ def positional_cv(hist: dict, players: dict) -> dict[str, float]:
     return out
 
 
-def volatility_profile(pid: str, pos: str, hist: dict,
-                       pos_cv: dict[str, float]) -> dict:
+def volatility_profile(pid: str, pos: str, hist: dict, pos_cv: dict[str, float],
+                       players: dict | None = None) -> dict:
     """Coefficient of variation of real per-game scoring, shrunk to position.
 
     CV rather than raw stdev, so the estimate transfers when a player's role or
@@ -266,7 +303,21 @@ def volatility_profile(pid: str, pos: str, hist: dict,
     rec = hist.get(pid)
     prior_cv = pos_cv.get(pos, 0.55)
     if not rec or rec["games_played"] < 3:
-        return {"cv": round(prior_cv, 3), "cv_sample_games": 0}
+        # No real track record to measure -- the positional prior is all there
+        # is. Skew it by depth-chart slot: a backup's fantasy output is a bet
+        # on someone else's opportunity, not a role, which is inherently more
+        # boom/bust than a penciled-in starter even before either has played.
+        if players is not None:
+            order = (players.get(pid) or {}).get("depth_chart_order")
+            try:
+                order = int(order)
+            except (TypeError, ValueError):
+                order = None
+            bump = (DEPTH_CHART_CV_BUMP.get(order, DEPTH_CHART_CV_BUMP_DEFAULT)
+                   if order else DEPTH_CHART_CV_BUMP_DEFAULT)
+            prior_cv = float(np.clip(prior_cv * bump, 0.15, 1.6))
+        sample_games = rec["games_played"] if rec else 0
+        return {"cv": round(prior_cv, 3), "cv_sample_games": sample_games}
 
     pts = np.asarray(rec["points"], dtype=float)
     mean = float(pts.mean())
