@@ -20,6 +20,7 @@ from config import (
     FLEX_POSITIONS,
     GAMES_PER_TEAM,
     LEAGUE_TEAMS,
+    MARKET_ECR_WEIGHT,
     MARKET_FADE_ASYMMETRY,
     MARKET_WEIGHT,
     N_SIMS,
@@ -34,6 +35,7 @@ from config import (
     TIER_DROP,
 )
 from logger import logger
+from market import norm_name
 from risk import (
     build_history,
     player_risk_profile,
@@ -41,6 +43,43 @@ from risk import (
     volatility_profile,
 )
 from scoring import score_row
+
+
+def _derive_bye_weeks(proj_by_week: dict[int, dict], players: dict) -> dict[str, int]:
+    """Each team's bye week, read off the season's own weekly projections.
+
+    No schedule source is needed: the pipeline already pulls a full season of
+    weekly projections, and a team's entire roster projects ~zero total games
+    in exactly one week -- that is its bye. Restricted to OL_RATING's team list
+    so a stale/retired abbreviation on an old player record can't manufacture a
+    fake team.
+    """
+    from config import OL_RATING  # local import: avoids a module-level cycle risk
+
+    team_week_gp: dict[str, dict[int, float]] = {}
+    for week, payload in proj_by_week.items():
+        for pid, row in (payload or {}).items():
+            if not isinstance(row, dict):
+                continue
+            team = (players.get(pid) or {}).get("team")
+            if team not in OL_RATING:
+                continue
+            wk = team_week_gp.setdefault(team, {})
+            wk[week] = wk.get(week, 0.0) + float(row.get("gp") or 0.0)
+
+    byes: dict[str, int] = {}
+    for team, weeks in team_week_gp.items():
+        if len(weeks) < 2:
+            continue
+        bye_week = min(weeks, key=weeks.get)
+        others = [v for w, v in weeks.items() if w != bye_week]
+        avg_other = sum(others) / len(others) if others else 0.0
+        # Only trust it if that week is a clear outlier against the rest --
+        # otherwise this is an early-offseason cache with too few weeks loaded
+        # to tell a bye from ordinary noise.
+        if avg_other > 0 and weeks[bye_week] <= 0.05 * avg_other:
+            byes[team] = int(bye_week)
+    return byes
 
 
 # ------------------------------------------------------- base projections
@@ -51,6 +90,7 @@ def build_base_projections(proj_by_week: dict[int, dict], players: dict) -> pd.D
     injury adjustment honest: the rate is "points when he plays", and games
     played is then supplied separately by the risk model.
     """
+    byes = _derive_bye_weeks(proj_by_week, players)
     totals: dict[str, dict] = {}
     for week, payload in proj_by_week.items():
         for pid, row in (payload or {}).items():
@@ -94,7 +134,7 @@ def build_base_projections(proj_by_week: dict[int, dict], players: dict) -> pd.D
                 "search_rank": info.get("search_rank"),
                 "depth_chart_order": info.get("depth_chart_order"),
                 "years_exp": info.get("years_exp"),
-                "bye_risk_weeks": np.nan,
+                "bye_week": byes.get(info.get("team")),
             }
         )
     df = pd.DataFrame(rows)
@@ -108,7 +148,7 @@ def attach_risk(df: pd.DataFrame, players: dict, hist: dict) -> pd.DataFrame:
     records = []
     for row in df.itertuples(index=False):
         profile = player_risk_profile(row.player_id, row.pos, players, hist)
-        profile.update(volatility_profile(row.player_id, row.pos, hist, pos_cv))
+        profile.update(volatility_profile(row.player_id, row.pos, hist, pos_cv, players))
         profile["player_id"] = row.player_id
         # Historical role: snap share separates a starter from a committee back.
         rec = hist.get(row.player_id) or {}
@@ -313,8 +353,6 @@ def compute_vorp(df: pd.DataFrame, teams: int = LEAGUE_TEAMS) -> pd.DataFrame:
 
     df["replacement"] = df["pos"].map(baselines)
     df["VORP"] = df["proj_points"] - df["replacement"]
-    df["VORP_ceiling"] = df["sim_p90"] - df["replacement"]
-    df["VORP_floor"] = df["sim_p10"] - df["replacement"]
     # What last year's model would have said, for comparison.
     naive_base = {
         pos: float(
@@ -329,15 +367,45 @@ def compute_vorp(df: pd.DataFrame, teams: int = LEAGUE_TEAMS) -> pd.DataFrame:
     return df
 
 
+def attach_sim_vorp(df: pd.DataFrame) -> pd.DataFrame:
+    """Ceiling/floor VORP from the simulation, once it has run.
+
+    Split out of compute_vorp() because blend_market() (and the market-gap
+    signal simulate_seasons() reads for projection uncertainty) only needs
+    replacement/VORP, not the simulated distribution -- so this step can run
+    after the simulation instead of forcing the simulation to run before the
+    market blend.
+    """
+    df = df.copy()
+    df["VORP_ceiling"] = df["sim_p90"] - df["replacement"]
+    df["VORP_floor"] = df["sim_p10"] - df["replacement"]
+    return df
+
+
 # ------------------------------------------------------- market blend
-def blend_market(df: pd.DataFrame, teams: int = LEAGUE_TEAMS) -> pd.DataFrame:
-    """Reconcile the model with consensus ADP.
+def _rank_value(adp: pd.Series, value_curve: np.ndarray) -> np.ndarray:
+    """Points implied by a rank, read off the model's own VORP-by-rank curve."""
+    positions = np.arange(1, len(value_curve) + 1)
+    return np.interp(adp.to_numpy(), positions, value_curve)
+
+
+def blend_market(df: pd.DataFrame, teams: int = LEAGUE_TEAMS,
+                 ecr: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Reconcile the model with consensus: Sleeper ADP, and (if reachable)
+    FantasyPros expert consensus rank (ECR).
 
     Consensus prices in things a stat line cannot: camp reports, holdouts,
     scheme changes, and how a rehab is actually going. So where the market is
     far more pessimistic than the model, it usually knows something -- that
     direction gets extra weight (MARKET_FADE_ASYMMETRY). The disagreement
     itself is the useful output: it names your targets and your fades.
+
+    ADP and ECR are two different opinions, not the same one twice: ADP is
+    what a draft actually costs (a single platform's crowd), ECR is a panel of
+    analysts' stated ranking. Blending them (MARKET_ECR_WEIGHT) means a
+    Sleeper-specific quirk in ADP alone can't masquerade as a real market
+    inefficiency. Missing ECR (offline, page format change, no match for this
+    player) falls back to ADP-only, unchanged from before ECR existed.
     """
     df = df.copy()
     max_adp = float(teams * 16)
@@ -348,8 +416,25 @@ def blend_market(df: pd.DataFrame, teams: int = LEAGUE_TEAMS) -> pd.DataFrame:
     # rank the market assigns. This puts both opinions in the same units.
     ranked = df.sort_values("VORP", ascending=False).reset_index(drop=True)
     value_curve = ranked["VORP"].to_numpy()
-    positions = np.arange(1, len(value_curve) + 1)
-    market_vorp = np.interp(adp.to_numpy(), positions, value_curve)
+    adp_vorp = _rank_value(adp, value_curve)
+
+    market_vorp = adp_vorp.copy()
+    if ecr is not None and not ecr.empty and "key" in ecr.columns:
+        # Join on name AND position -- a bare name can rarely collide across
+        # positions (e.g. two active players sharing a name).
+        offense = ecr[ecr["pos"] != "DEF"].dropna(subset=["fp_rank"]).copy()
+        offense["join_key"] = offense["key"] + "|" + offense["pos"].astype(str)
+        lookup = offense.drop_duplicates("join_key").set_index("join_key")["fp_rank"]
+        join_key = df["player"].map(norm_name) + "|" + df["pos"].astype(str)
+        fp_rank = join_key.map(lookup)
+        has_ecr = fp_rank.notna().to_numpy()
+        if has_ecr.any():
+            ecr_vorp = _rank_value(fp_rank.fillna(max_adp).clip(upper=max_adp), value_curve)
+            w = MARKET_ECR_WEIGHT
+            market_vorp = np.where(has_ecr, (1 - w) * adp_vorp + w * ecr_vorp, adp_vorp)
+            logger.info(f"Blended FantasyPros ECR into the market signal for "
+                       f"{int(has_ecr.sum())}/{len(df)} players.")
+        df["fp_rank"] = fp_rank
     df["market_VORP"] = market_vorp
 
     weight = np.full(len(df), MARKET_WEIGHT)
@@ -360,6 +445,8 @@ def blend_market(df: pd.DataFrame, teams: int = LEAGUE_TEAMS) -> pd.DataFrame:
 
     df["blended_VORP"] = (1 - weight) * df["VORP"] + weight * market_vorp
     df["market_gap"] = df["VORP"] - df["market_VORP"]
+    gap_sd = df["market_gap"].std(ddof=0)
+    df["market_gap_z"] = (df["market_gap"] / gap_sd) if gap_sd > 1e-9 else 0.0
 
     df["model_rank"] = df["blended_VORP"].rank(ascending=False, method="first").astype(int)
     df["market_rank"] = adp.rank(method="first").astype(int)
@@ -419,14 +506,23 @@ def assign_tiers(df: pd.DataFrame, tier_drop: float = TIER_DROP) -> pd.DataFrame
 
 def build_valuation(proj_by_week: dict[int, dict],
                     actuals_by_season: dict[int, dict[int, dict]],
-                    players: dict) -> pd.DataFrame:
-    """Full pipeline: projections -> risk -> simulation -> VORP -> market."""
+                    players: dict, ecr: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Full pipeline: projections -> risk -> VORP -> market -> simulation.
+
+    The market blend runs BEFORE the simulation on purpose: it produces
+    market_gap_z (how sharply the model and consensus disagree on a player),
+    which simulate_seasons() reads to widen that player's projection
+    uncertainty. A player the market has priced way off from the model is
+    inherently less certain, and that has to show up in his own distribution,
+    not just in a ranking footnote.
+    """
     hist = build_history(actuals_by_season, players)
     df = build_base_projections(proj_by_week, players)
     df = attach_risk(df, players, hist)
-    df = simulate_seasons(df)
     df = compute_vorp(df)
-    df = blend_market(df)
+    df = blend_market(df, ecr=ecr)
+    df = simulate_seasons(df)
+    df = attach_sim_vorp(df)
     df = championship_score(df)
     df = assign_tiers(df)
     return df.sort_values("champ_rank").reset_index(drop=True)

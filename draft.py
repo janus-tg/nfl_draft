@@ -385,6 +385,7 @@ def build_plan_for_slot(board: pd.DataFrame, curve_df: pd.DataFrame, slot: int,
                     "Team": p["team"],
                     "Pos": p["pos"],
                     "Tier": int(p["tier"]),
+                    "Bye": int(p["bye_week"]) if pd.notna(p.get("bye_week")) else None,
                     "ADP": round(float(p["adp_filled"]), 1),
                     "P(available)": round(
                         float(avail[rnd, pool_index[pid]]) if pid in pool_index else float("nan"), 3
@@ -407,6 +408,15 @@ def build_plan_for_slot(board: pd.DataFrame, curve_df: pd.DataFrame, slot: int,
         )
         logger.info(f"Slot {slot:2d}: typical roster {shape} "
                     f"| mean team VORP {sim['team_value_mean']:.0f}")
+
+    if not plan.empty and "Bye" in plan.columns:
+        primary = plan[(plan["Choice"] == "PRIMARY") & plan["Bye"].notna()]
+        for (pos, bye), grp in primary.groupby(["Pos", "Bye"]):
+            if len(grp) >= 2:
+                logger.info(
+                    f"Slot {slot:2d}: bye-week clash -- {len(grp)}x {pos} out "
+                    f"week {int(bye)} ({', '.join(grp['Player'])})"
+                )
     return plan
 
 

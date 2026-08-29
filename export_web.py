@@ -76,6 +76,7 @@ def build_plans(plan_df: pd.DataFrame) -> dict:
                 "team": p["Team"],
                 "pos": p["Pos"],
                 "tier": int(p["Tier"]),
+                "bye": _clean(p["Bye"]) if "Bye" in p else None,
                 "adp": _clean(p["ADP"]),
                 "pAvail": _clean(p["P(available)"]),
                 "proj": _clean(p["ProjPts"]),

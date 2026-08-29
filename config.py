@@ -125,6 +125,14 @@ DURABILITY_PRIOR_GAMES = 20
 MIN_GAMES_FOR_DURABILITY_SEASON = 5
 # Shrinkage weight (in games) for per-game volatility toward the positional mean.
 VOLATILITY_PRIOR_GAMES = 10
+# For a player with too little game history to measure his own volatility
+# (rookies, deep bench), the positional-median CV prior is bumped up based on
+# his depth-chart slot. A backup's fantasy output depends on someone else
+# getting hurt or benched, which is a bet on opportunity, not a role -- that is
+# inherently more boom/bust than a penciled-in starter, even before either one
+# has played a game.
+DEPTH_CHART_CV_BUMP = {1: 1.00, 2: 1.08, 3: 1.18}
+DEPTH_CHART_CV_BUMP_DEFAULT = 1.18  # unknown or deeper than 3rd on the chart
 
 # Share of a player's expected missed games that comes from a SEASON-ENDING
 # injury rather than week-to-week absences. Modelling every absence as an
@@ -169,6 +177,25 @@ OL_RATING = {
 QB_OL_ADJUSTMENT_STRENGTH = 0.10
 QB_OL_ADJUSTMENT_CLIP = (0.85, 1.15)  # floor/ceiling on the resulting multiplier
 
+# A traded/free-agent RB has no games at his new team, so his "own historical
+# rate" (the usual justification for leaving RBs out of the OL adjustment)
+# reflects the OLD team's blocking. For RBs who just changed teams, apply the
+# same OL effect QBs get. Not applied to RBs who stayed put -- their history
+# already prices their own line in.
+RB_MOVER_OL_ADJUSTMENT_STRENGTH = 0.10
+# How recent counts as "this offseason" for the mover adjustment above.
+RECENT_TEAM_CHANGE_DAYS = 300
+
+# Manual override for suspension length, in games, keyed by Sleeper player_id.
+# INJURY_STATUS_EFFECT["Sus"] above is a generic 3-game placeholder; a real
+# suspension is public and known-length (PED policy, conduct policy, etc.), so
+# add entries here as news breaks -- it replaces, rather than adds to, the
+# generic estimate. Find a player's id in .cache/players_nfl.json (search by
+# full_name) or https://api.sleeper.app/v1/players/nfl.
+SUSPENSION_GAMES_OVERRIDE: dict[str, float] = {
+    # "1234": 6.0,  # example: Player Name, PED policy, 6 games
+}
+
 # ---------------------------------------------------------------- market
 # How much to trust consensus ADP vs. the projection model when they disagree.
 # 0 = ignore the market, 1 = draft strictly to ADP.
@@ -176,6 +203,12 @@ MARKET_WEIGHT = 0.35
 # The market is trusted more when it is far BELOW the model (it usually knows
 # about a situation the box score can't see); this is the extra asymmetric pull.
 MARKET_FADE_ASYMMETRY = 0.20
+# How much of the "market" signal comes from FantasyPros expert consensus (ECR)
+# vs. raw Sleeper ADP, when ECR is reachable. ADP is what a draft actually
+# costs; ECR is a second, differently-biased opinion on true value. 0 = ADP
+# only (also the automatic fallback if FantasyPros can't be reached), 1 = ECR
+# only.
+MARKET_ECR_WEIGHT = 0.5
 
 # ---------------------------------------------------------------- simulation
 N_SIMS = 4000

@@ -9,14 +9,19 @@ from config import SCORING
 
 
 def _g(row: dict, *keys: str) -> float:
-    """First present, non-null key among `keys`, as a float (else 0.0)."""
+    """First present, non-null, numeric key among `keys`, as a float (else 0.0).
+
+    A key that exists but won't parse (bad feed data) is skipped rather than
+    giving up, so a later fallback key still gets a chance.
+    """
     for k in keys:
         v = row.get(k)
-        if v is not None:
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                return 0.0
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
     return 0.0
 
 

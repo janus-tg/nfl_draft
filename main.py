@@ -31,6 +31,7 @@ from config import (
 )
 from draft import availability_curves, build_all_slot_plans, positional_run_table
 from logger import logger
+from market import fetch_expert_consensus
 from valuation import build_valuation
 
 OUTPUT_PATH = os.path.join(OUTPUT_DIR, f"draft_board_{SEASON}.xlsx")
@@ -45,7 +46,7 @@ BOARD_COLS = [
     "injury_status", "injury_detail", "injury_games_missed",
     "durability_rate", "age", "cv", "dud_week_rate", "playoff_ppg",
     "naive_points", "risk_cost", "snap_share", "hist_ppg", "hist_games",
-    "ol_rating", "ol_multiplier",
+    "ol_rating", "ol_multiplier", "bye_week", "fp_rank",
 ]
 
 RENAME = {
@@ -65,6 +66,7 @@ RENAME = {
     "risk_cost": "RiskCost", "snap_share": "SnapShare",
     "hist_ppg": "HistPPG", "hist_games": "HistGm",
     "ol_rating": "OLRating", "ol_multiplier": "OLMult",
+    "bye_week": "Bye", "fp_rank": "FPRank",
 }
 
 
@@ -116,7 +118,7 @@ def build_cheatsheet(board: pd.DataFrame, n: int = 200) -> pd.DataFrame:
     cols = [
         "champ_rank", "player", "team", "pos", "pos_rank", "tier", "adp_filled",
         "rank_edge", "proj_points", "blended_VORP", "sim_p10", "sim_p90",
-        "p_positional_elite", "p_bust", "expected_games", "injury_status",
+        "p_positional_elite", "p_bust", "expected_games", "bye_week", "injury_status",
     ]
     out = board.sort_values("champ_rank").head(n)[_present(board, cols)]
     return out.rename(columns=RENAME).round(2)
@@ -180,7 +182,14 @@ def main() -> None:
         for season in HISTORY_SEASONS
     }
 
-    board = build_valuation(projections, actuals, players)
+    try:
+        ecr = fetch_expert_consensus("PPR")
+    except Exception as exc:
+        logger.warning(f"FantasyPros consensus unavailable, using ADP-only "
+                       f"market blend: {exc}")
+        ecr = None
+
+    board = build_valuation(projections, actuals, players, ecr=ecr)
 
     logger.info("Simulating draft-day availability ...")
     curves = availability_curves(board)
