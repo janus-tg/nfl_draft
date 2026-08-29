@@ -116,6 +116,13 @@ export function canTake(roster, pos, round, league) {
   const limit = league.positionLimits[pos] ?? 99
   if ((roster.counts[pos] || 0) >= limit) return false
   if (round < (league.earliestRound[pos] ?? 0)) return false
+  // Don't head into the final picks still missing a starting slot -- mirrors
+  // draft.py's Roster.can_take so the live tracker forces the same late-draft
+  // lineup-filling behavior the offline plan does.
+  const missing = startersMissing(roster, league.starters)
+  const totalMissing = Object.values(missing).reduce((a, b) => a + b, 0)
+  const picksLeft = league.rounds - round + 1
+  if (picksLeft <= totalMissing && (missing[pos] || 0) === 0) return false
   return true
 }
 
