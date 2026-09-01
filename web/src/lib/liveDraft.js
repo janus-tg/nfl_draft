@@ -92,6 +92,19 @@ function flexFilled(roster, starters, flexPositions) {
   return surplus >= 1
 }
 
+/** Players on the roster that aren't occupying a starter or the flex slot.
+ *  Mirrors draft.py's Roster.bench_used -- without this, positional limits
+ *  alone (e.g. 6 RB + 7 WR) let a roster stack bench players well past
+ *  league.benchSlots while leaving no picks left for K/DEF. */
+function benchUsed(roster, starters, flexPositions) {
+  const startersFilled = Object.keys(starters).reduce(
+    (sum, pos) => sum + Math.min(roster.counts[pos] || 0, starters[pos] || 0),
+    0
+  )
+  const flexUsed = flexFilled(roster, starters, flexPositions) ? 1 : 0
+  return Math.max(0, roster.picks.length - startersFilled - flexUsed)
+}
+
 /** How much this roster wants another player at `pos` right now. Diminishing
  *  bench value is what stops the recommender stacking five backup RBs in a
  *  row once the starting lineup is set. */
@@ -123,6 +136,13 @@ export function canTake(roster, pos, round, league) {
   const totalMissing = Object.values(missing).reduce((a, b) => a + b, 0)
   const picksLeft = league.rounds - round + 1
   if (picksLeft <= totalMissing && (missing[pos] || 0) === 0) return false
+  // Once the bench is full, only a pick that fills a starter or the flex
+  // slot is allowed -- otherwise the roster overfills the bench.
+  const fillsStarter = (missing[pos] || 0) > 0
+  const fillsFlex = league.flexPositions.includes(pos) && !flexFilled(roster, league.starters, league.flexPositions)
+  if (!fillsStarter && !fillsFlex && benchUsed(roster, league.starters, league.flexPositions) >= league.benchSlots) {
+    return false
+  }
   return true
 }
 

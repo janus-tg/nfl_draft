@@ -17,11 +17,12 @@ import {
 const DEFAULT_LEAGUE = {
   teams: 12,
   rounds: 15,
-  starters: { QB: 1, RB: 2, WR: 2, TE: 1, K: 1, DEF: 1 },
+  starters: { QB: 1, RB: 2, WR: 3, TE: 1, K: 1, DEF: 1 },
   flexPositions: ['RB', 'WR', 'TE'],
   benchSlots: 5,
-  positionLimits: { QB: 2, RB: 6, WR: 7, TE: 2, K: 1, DEF: 1 },
-  earliestRound: { QB: 4, TE: 3, K: 15, DEF: 14 },
+  positionLimits: { QB: 1, RB: 6, WR: 7, TE: 2, K: 1, DEF: 1 },
+  // K and DEF are the last two picks of the draft; DEF goes dead last.
+  earliestRound: { QB: 4, TE: 3, K: 14, DEF: 15 },
   adpNoiseSd: 8.0,
 }
 

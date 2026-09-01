@@ -46,11 +46,14 @@ SCORING = {
     "dst_xp_ret": 2,
 }
 
+# 1+2+3+1 starters + 1 FLEX + 1 K + 1 DEF + 5 bench = 15, matching
+# DRAFT_ROUNDS below -- every pick in the draft has to land in one of these
+# slots, or the roster tracker silently overfills the bench past BN.
 LINEUP = [
-    ("QB", 1), ("RB", 2), ("WR", 2), ("TE", 1),
+    ("QB", 1), ("RB", 2), ("WR", 3), ("TE", 1),
     ("FLEX", 1), ("K", 1), ("DEF", 1), ("BN", 5),
 ]
-STARTERS = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1}
+STARTERS = {"QB": 1, "RB": 2, "WR": 3, "TE": 1, "K": 1, "DEF": 1}
 FLEX_POSITIONS = ["RB", "WR", "TE"]
 BENCH_SLOTS = 5
 POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
@@ -227,10 +230,13 @@ ROUND_UPSIDE_TILT = {1: 1.25, 2: 1.20, 3: 1.10, 4: 1.00, 5: 0.90, 6: 0.85,
 TIER_DROP = 8.0
 QB_EARLIEST_ROUND = 4
 TE_EARLIEST_ROUND = 3
-K_EARLIEST_ROUND = 15
-DEF_EARLIEST_ROUND = 14
+# K and DEF are the last two picks of the draft; DEF goes dead last.
+K_EARLIEST_ROUND = 14
+DEF_EARLIEST_ROUND = 15
 # Max rostered per position (stops the plan hoarding one position).
-POSITION_LIMITS = {"QB": 2, "RB": 6, "WR": 7, "TE": 2, "K": 1, "DEF": 1}
+# QB is capped at the 1 starter -- no backup QB, that roster spot goes
+# elsewhere once the starter is drafted.
+POSITION_LIMITS = {"QB": 1, "RB": 6, "WR": 7, "TE": 2, "K": 1, "DEF": 1}
 # ADP noise (in picks) when simulating what the other 11 managers do.
 ADP_NOISE_SD = 8.0
 

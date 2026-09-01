@@ -21,6 +21,7 @@ import pandas as pd
 
 from config import (
     ADP_NOISE_SD,
+    BENCH_SLOTS,
     DEF_EARLIEST_ROUND,
     DRAFT_ROUNDS,
     FLEX_POSITIONS,
@@ -80,15 +81,34 @@ class Roster:
         )
         return surplus >= 1
 
+    def bench_used(self) -> int:
+        """Players on the roster that aren't occupying a starter or the flex
+        slot. Only positional limits gated bench size before this -- e.g.
+        RB/WR limits alone allow 6+7=13 bench-eligible players, so nothing
+        stopped a roster from stacking bench past BENCH_SLOTS while leaving no
+        picks for K/DEF."""
+        starters_filled = sum(
+            min(self.counts[p], STARTERS.get(p, 0)) for p in POSITIONS
+        )
+        flex_used = 1 if self.flex_filled() else 0
+        return max(0, self.total() - starters_filled - flex_used)
+
     def can_take(self, pos: str, rnd: int, rounds: int = DRAFT_ROUNDS) -> bool:
         if self.counts[pos] >= POSITION_LIMITS.get(pos, 99):
             return False
         if rnd < EARLIEST_ROUND.get(pos, 0):
             return False
+        missing = self.starters_missing()
         # Don't head into the final rounds still missing a starting slot.
         rounds_left = rounds - rnd + 1
-        missing = sum(self.starters_missing().values())
-        if rounds_left <= missing and self.starters_missing().get(pos, 0) == 0:
+        total_missing = sum(missing.values())
+        if rounds_left <= total_missing and missing.get(pos, 0) == 0:
+            return False
+        # Once the bench is full, only a pick that fills a starter or the
+        # flex slot is allowed -- otherwise the roster overfills the bench.
+        fills_starter = missing.get(pos, 0) > 0
+        fills_flex = pos in FLEX_POSITIONS and not self.flex_filled()
+        if not fills_starter and not fills_flex and self.bench_used() >= BENCH_SLOTS:
             return False
         return True
 
