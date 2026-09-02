@@ -104,10 +104,17 @@ class Roster:
         total_missing = sum(missing.values())
         if rounds_left <= total_missing and missing.get(pos, 0) == 0:
             return False
-        # Once the bench is full, only a pick that fills a starter or the
-        # flex slot is allowed -- otherwise the roster overfills the bench.
         fills_starter = missing.get(pos, 0) > 0
         fills_flex = pos in FLEX_POSITIONS and not self.flex_filled()
+        # Only the starting lineup wins games -- fill every non-K/DEF starter
+        # and the flex before spending a pick on bench depth. K/DEF are
+        # exempt: EARLIEST_ROUND already pins them to the last two picks
+        # regardless, so they'd never compete with a bench pick anyway.
+        core_missing = sum(v for p, v in missing.items() if p not in ("K", "DEF"))
+        if core_missing > 0 and pos not in ("K", "DEF") and not fills_starter and not fills_flex:
+            return False
+        # Once the bench is full, only a pick that fills a starter or the
+        # flex slot is allowed -- otherwise the roster overfills the bench.
         if not fills_starter and not fills_flex and self.bench_used() >= BENCH_SLOTS:
             return False
         return True

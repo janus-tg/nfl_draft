@@ -136,10 +136,19 @@ export function canTake(roster, pos, round, league) {
   const totalMissing = Object.values(missing).reduce((a, b) => a + b, 0)
   const picksLeft = league.rounds - round + 1
   if (picksLeft <= totalMissing && (missing[pos] || 0) === 0) return false
-  // Once the bench is full, only a pick that fills a starter or the flex
-  // slot is allowed -- otherwise the roster overfills the bench.
   const fillsStarter = (missing[pos] || 0) > 0
   const fillsFlex = league.flexPositions.includes(pos) && !flexFilled(roster, league.starters, league.flexPositions)
+  // Only the starting lineup wins games -- fill every non-K/DEF starter and
+  // the flex before spending a pick on bench depth. K/DEF are exempt:
+  // earliestRound already pins them to the last two picks regardless, so
+  // they'd never compete with a bench pick anyway.
+  const coreMissing = Object.entries(missing).reduce(
+    (sum, [p, v]) => (p === 'K' || p === 'DEF' ? sum : sum + v),
+    0
+  )
+  if (coreMissing > 0 && pos !== 'K' && pos !== 'DEF' && !fillsStarter && !fillsFlex) return false
+  // Once the bench is full, only a pick that fills a starter or the flex
+  // slot is allowed -- otherwise the roster overfills the bench.
   if (!fillsStarter && !fillsFlex && benchUsed(roster, league.starters, league.flexPositions) >= league.benchSlots) {
     return false
   }
